@@ -81,8 +81,24 @@ jobs:
           if [[ "${{ matrix.os }}" == "win" ]]; then binary="source/apps/codex/resources/bin/codex.exe"; else binary="source/apps/codex/resources/bin/codex"; fi
           "$binary" --version
 
+      - name: Verify Supabase build configuration
+        shell: bash
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          test -n "$VITE_SUPABASE_URL"
+          test -n "$VITE_SUPABASE_ANON_KEY"
+          status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            "$VITE_SUPABASE_URL/rest/v1/app_version?select=id&limit=1" \
+            -H "apikey: $VITE_SUPABASE_ANON_KEY")"
+          test "$status" -ge 200 -a "$status" -lt 500
+
       - name: Build renderer and run tests
         shell: bash
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: |
           pnpm --dir source/apps/codex build
           pnpm --dir source/apps/codex test:electron
