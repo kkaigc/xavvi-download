@@ -119,7 +119,9 @@ jobs:
         run: |
           asar="$(find source/apps/codex/release -path '*/resources/app.asar' -type f -print -quit)"
           test -n "$asar"
-          node source/apps/codex/node_modules/.pnpm/@electron+asar@3.4.1/node_modules/@electron/asar/bin/asar.js list "$asar" > packaged-files.txt
+          node source/apps/codex/node_modules/.pnpm/@electron+asar@3.4.1/node_modules/@electron/asar/bin/asar.js list "$asar" > packaged-files.raw.txt
+          tr '\\' '/' < packaged-files.raw.txt > packaged-files.txt
+          missing=0
           for file in \
             /electron/main.cjs \
             /electron/model-provider-config.cjs \
@@ -127,8 +129,12 @@ jobs:
             /electron/lib/codex-workspace.cjs \
             /electron/window-chrome.cjs \
             /dist/brand/xavvi-logo.svg; do
-            grep -Fx "$file" packaged-files.txt >/dev/null
+            if ! grep -Fx "$file" packaged-files.txt >/dev/null; then
+              echo "::error::Packaged app.asar is missing $file"
+              missing=1
+            fi
           done
+          test "$missing" -eq 0
 
       - name: Create checksums
         shell: bash
