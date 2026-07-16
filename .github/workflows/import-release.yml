@@ -1,0 +1,57 @@
+name: Import Private Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_tag:
+        description: Source release tag in the private repository
+        required: true
+        default: codex-v1.0.0
+        type: string
+      destination_tag:
+        description: Public release tag
+        required: true
+        default: codex-v1.0.0
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    name: Publish Xavvi downloads
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download private release assets
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_RELEASE_TOKEN }}
+        run: |
+          mkdir -p release-assets
+          gh release download "${{ inputs.source_tag }}" \
+            --repo kkaigc/tarui-clawhunt \
+            --dir release-assets \
+            --pattern '*.dmg' \
+            --pattern '*.exe' \
+            --pattern '*.zip' \
+            --pattern 'SHA256SUMS-*.txt'
+
+      - name: Verify download set
+        shell: bash
+        run: |
+          mapfile -d '' files < <(find release-assets -maxdepth 1 -type f -print0)
+          if [[ "${#files[@]}" -ne 9 ]]; then
+            echo "Expected 9 public release files, found ${#files[@]}" >&2
+            find release-assets -maxdepth 1 -type f -print >&2
+            exit 1
+          fi
+
+      - name: Publish public release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="${{ inputs.destination_tag }}"
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "Xavvi ${tag#codex-v}" --notes "Official Xavvi desktop client downloads for Windows and macOS."
+          mapfile -d '' files < <(find release-assets -maxdepth 1 -type f -print0)
+          gh release upload "$tag" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
