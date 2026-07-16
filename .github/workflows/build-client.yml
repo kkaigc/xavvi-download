@@ -11,8 +11,16 @@ on:
       release_tag:
         description: Public release tag
         required: true
-        default: codex-v1.0.1
+        default: codex-v1.0.2
         type: string
+      target:
+        description: Client package target
+        required: true
+        default: win-exe
+        type: choice
+        options:
+          - win-exe
+          - all
 
 permissions:
   contents: write
@@ -24,22 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: macOS arm64
-            runner: macos-14
-            os: mac
-            platform: darwin
-            arch: arm64
-          - name: macOS x64
-            runner: macos-15-intel
-            os: mac
-            platform: darwin
-            arch: x64
-          - name: Windows x64
-            runner: windows-latest
-            os: win
-            platform: win32
-            arch: x64
+        include: ${{ fromJSON(inputs.target == 'win-exe' && '[{"name":"Windows x64 EXE","runner":"windows-latest","os":"win","platform":"win32","arch":"x64"}]' || '[{"name":"macOS arm64","runner":"macos-14","os":"mac","platform":"darwin","arch":"arm64"},{"name":"macOS x64","runner":"macos-15-intel","os":"mac","platform":"darwin","arch":"x64"},{"name":"Windows x64","runner":"windows-latest","os":"win","platform":"win32","arch":"x64"}]') }}
 
     steps:
       - name: Checkout private source
@@ -98,7 +91,12 @@ jobs:
         shell: bash
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: pnpm --dir source/apps/codex exec electron-builder --${{ matrix.os }} --${{ matrix.arch }} --publish never
+        run: |
+          if [[ "${{ inputs.target }}" == "win-exe" ]]; then
+            pnpm --dir source/apps/codex exec electron-builder --win nsis --x64 --publish never
+          else
+            pnpm --dir source/apps/codex exec electron-builder --${{ matrix.os }} --${{ matrix.arch }} --publish never
+          fi
 
       - name: Create checksums
         shell: bash
@@ -110,10 +108,10 @@ jobs:
         with:
           name: xavvi-${{ matrix.os }}-${{ matrix.arch }}-${{ inputs.release_tag }}
           path: |
-            source/apps/codex/release/*
-            !source/apps/codex/release/*.yml
-            !source/apps/codex/release/*.yaml
-            !source/apps/codex/release/*.blockmap
+            source/apps/codex/release/*.dmg
+            source/apps/codex/release/*.exe
+            source/apps/codex/release/*.zip
+            source/apps/codex/release/SHA256SUMS-*.txt
           if-no-files-found: error
 
       - name: Publish public release assets
