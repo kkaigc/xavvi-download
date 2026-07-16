@@ -114,6 +114,22 @@ jobs:
             pnpm --dir source/apps/codex exec electron-builder --${{ matrix.os }} --${{ matrix.arch }} --publish never
           fi
 
+      - name: Verify packaged Electron modules
+        shell: bash
+        run: |
+          asar="$(find source/apps/codex/release -path '*/resources/app.asar' -type f -print -quit)"
+          test -n "$asar"
+          node source/apps/codex/node_modules/.pnpm/@electron+asar@3.4.1/node_modules/@electron/asar/bin/asar.js list "$asar" > packaged-files.txt
+          for file in \
+            /electron/main.cjs \
+            /electron/model-provider-config.cjs \
+            /electron/runtime-paths.cjs \
+            /electron/lib/codex-workspace.cjs \
+            /electron/window-chrome.cjs \
+            /dist/brand/xavvi-logo.svg; do
+            grep -Fx "$file" packaged-files.txt >/dev/null
+          done
+
       - name: Create checksums
         shell: bash
         working-directory: source/apps/codex/release
