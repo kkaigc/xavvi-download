@@ -120,7 +120,7 @@ jobs:
       - name: Verify packaged Electron modules
         shell: bash
         run: |
-          asar="$(find source/apps/codex/release -path '*/resources/app.asar' -type f -print -quit)"
+          asar="$(find source/apps/codex/release -type f -name 'app.asar' -print -quit)"
           test -n "$asar"
           node source/apps/codex/node_modules/.pnpm/@electron+asar@3.4.1/node_modules/@electron/asar/bin/asar.js list "$asar" > packaged-files.raw.txt
           tr '\\' '/' < packaged-files.raw.txt > packaged-files.txt
