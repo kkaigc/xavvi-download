@@ -20,6 +20,7 @@ on:
         type: choice
         options:
           - win-exe
+          - mac-dmg-arm64
           - all
 
 permissions:
@@ -32,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.target == 'win-exe' && '[{"name":"Windows x64 EXE","runner":"windows-latest","os":"win","platform":"win32","arch":"x64"}]' || '[{"name":"macOS arm64","runner":"macos-14","os":"mac","platform":"darwin","arch":"arm64"},{"name":"macOS x64","runner":"macos-15-intel","os":"mac","platform":"darwin","arch":"x64"},{"name":"Windows x64","runner":"windows-latest","os":"win","platform":"win32","arch":"x64"}]') }}
+        include: ${{ fromJSON(inputs.target == 'win-exe' && '[{"name":"Windows x64 EXE","runner":"windows-latest","os":"win","platform":"win32","arch":"x64"}]' || inputs.target == 'mac-dmg-arm64' && '[{"name":"macOS arm64 DMG","runner":"macos-14","os":"mac","platform":"darwin","arch":"arm64"}]' || '[{"name":"macOS arm64","runner":"macos-14","os":"mac","platform":"darwin","arch":"arm64"},{"name":"macOS x64","runner":"macos-15-intel","os":"mac","platform":"darwin","arch":"x64"},{"name":"Windows x64","runner":"windows-latest","os":"win","platform":"win32","arch":"x64"}]') }}
 
     steps:
       - name: Checkout private source
@@ -110,6 +111,8 @@ jobs:
         run: |
           if [[ "${{ inputs.target }}" == "win-exe" ]]; then
             pnpm --dir source/apps/codex exec electron-builder --win nsis --x64 --publish never
+          elif [[ "${{ inputs.target }}" == "mac-dmg-arm64" ]]; then
+            pnpm --dir source/apps/codex exec electron-builder --mac dmg --arm64 --publish never
           else
             pnpm --dir source/apps/codex exec electron-builder --${{ matrix.os }} --${{ matrix.arch }} --publish never
           fi
