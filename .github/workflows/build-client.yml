@@ -63,11 +63,17 @@ jobs:
 
       - name: Set application version
         shell: bash
-        run: |
-          version="${{ inputs.release_tag }}"
-          npm --prefix source/apps/codex version "${version#codex-v}" --no-git-tag-version --allow-same-version
         env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
           npm_config_git_tag_version: "false"
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^codex-v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          version="${RELEASE_TAG#codex-v}"
+          npm --prefix source/apps/codex version "$version" --no-git-tag-version --allow-same-version
+          test "$(node -p "require('./source/apps/codex/package.json').version")" = "$version"
 
       - name: Prepare bundled Codex CLI
         shell: bash
@@ -124,6 +130,25 @@ jobs:
             pnpm --dir source/apps/codex exec electron-builder --mac dmg --arm64 --publish never
           else
             pnpm --dir source/apps/codex exec electron-builder --${{ matrix.os }} --${{ matrix.arch }} --publish never
+          fi
+
+      - name: Verify packaged application version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          expected_version="${RELEASE_TAG#codex-v}"
+          asar="$(find source/apps/codex/release -type f -name 'app.asar' -print -quit)"
+          test -n "$asar"
+          node -e '
+            const asar = require("./source/apps/codex/node_modules/.pnpm/@electron+asar@3.4.1/node_modules/@electron/asar")
+            const document = JSON.parse(asar.extractFile(process.argv[1], "package.json").toString("utf8"))
+            if (document.version !== process.argv[2]) throw new Error(`Packaged version ${document.version} does not match ${process.argv[2]}`)
+          ' "$asar" "$expected_version"
+          if [[ "${{ matrix.os }}" == "mac" ]]; then
+            app_bundle="$(find source/apps/codex/release -type d -name 'Xavvi.app' -print -quit)"
+            test -n "$app_bundle"
+            test "$(plutil -extract CFBundleShortVersionString raw "$app_bundle/Contents/Info.plist")" = "$expected_version"
           fi
 
       - name: Verify packaged Electron modules
