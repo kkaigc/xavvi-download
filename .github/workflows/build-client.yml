@@ -127,7 +127,7 @@ jobs:
           if [[ "${{ inputs.target }}" == "win-exe" ]]; then
             pnpm --dir source/apps/codex exec electron-builder --win nsis --x64 --publish never
           elif [[ "${{ inputs.target }}" == "mac-dmg-arm64" ]]; then
-            pnpm --dir source/apps/codex exec electron-builder --mac dmg --arm64 --publish never
+            pnpm --dir source/apps/codex exec electron-builder --mac dmg zip --arm64 --publish never
           else
             pnpm --dir source/apps/codex exec electron-builder --${{ matrix.os }} --${{ matrix.arch }} --publish never
           fi
@@ -201,6 +201,8 @@ jobs:
             source/apps/codex/release/*.dmg
             source/apps/codex/release/*.exe
             source/apps/codex/release/*.zip
+            source/apps/codex/release/*.yml
+            source/apps/codex/release/*.blockmap
             source/apps/codex/release/SHA256SUMS-*.txt
           if-no-files-found: error
 
@@ -221,5 +223,5 @@ jobs:
           while IFS= read -r -d '' file; do
             files+=("$file")
           done < <(find source/apps/codex/release -maxdepth 1 -type f \
-            ! -name '*.yml' ! -name '*.yaml' ! -name '*.blockmap' -print0)
+            ! -name 'builder-debug.yml' ! -name 'builder-effective-config.yaml' -print0)
           gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
