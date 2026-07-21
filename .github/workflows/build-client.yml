@@ -104,6 +104,15 @@ jobs:
           pnpm --dir source/apps/codex build
           pnpm --dir source/apps/codex test:electron
 
+      - name: Configure production platform endpoint
+        shell: bash
+        env:
+          CLAWOS_PLATFORM_API_URL: ${{ secrets.CLAWOS_PLATFORM_API_URL }}
+        run: |
+          test "$CLAWOS_PLATFORM_API_URL" = "https://xapi.xavvi.com"
+          curl --fail --silent --show-error "$CLAWOS_PLATFORM_API_URL/api/health"
+          pnpm --dir source/apps/codex configure:release
+
       - name: Package Electron client
         shell: bash
         env:
@@ -127,17 +136,32 @@ jobs:
           missing=0
           for file in \
             /electron/main.cjs \
+            /electron/desktop-endpoints.cjs \
             /electron/model-provider-config.cjs \
             /electron/runtime-paths.cjs \
             /electron/lib/codex-workspace.cjs \
             /electron/window-chrome.cjs \
-            /dist/brand/xavvi-logo.svg; do
+            /dist/brand/xavvi-logo.svg \
+            /dist-api/server.js; do
             if ! grep -Fx "$file" packaged-files.txt >/dev/null; then
               echo "::error::Packaged app.asar is missing $file"
               missing=1
             fi
           done
           test "$missing" -eq 0
+
+      - name: Verify packaged endpoint configuration
+        shell: bash
+        run: |
+          endpoint_file="$(find source/apps/codex/release -type f -path '*/config/endpoints.json' -print -quit)"
+          test -n "$endpoint_file"
+          node -e '
+            const fs = require("node:fs")
+            const document = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))
+            if (document.platform_api_url !== "https://xapi.xavvi.com") {
+              throw new Error(`Unexpected packaged platform endpoint: ${document.platform_api_url}`)
+            }
+          ' "$endpoint_file"
 
       - name: Create checksums
         shell: bash
