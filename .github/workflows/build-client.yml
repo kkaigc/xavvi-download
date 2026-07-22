@@ -11,7 +11,7 @@ on:
       release_tag:
         description: Public release tag
         required: true
-        default: codex-v1.0.2
+        default: xavvi-v1.0.8
         type: string
       target:
         description: Client package target
@@ -67,11 +67,11 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           npm_config_git_tag_version: "false"
         run: |
-          if [[ ! "$RELEASE_TAG" =~ ^codex-v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+          if [[ ! "$RELEASE_TAG" =~ ^xavvi-v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::Invalid release tag: $RELEASE_TAG"
             exit 1
           fi
-          version="${RELEASE_TAG#codex-v}"
+          version="${RELEASE_TAG#xavvi-v}"
           npm --prefix source/apps/codex version "$version" --no-git-tag-version --allow-same-version
           test "$(node -p "require('./source/apps/codex/package.json').version")" = "$version"
 
@@ -116,7 +116,7 @@ jobs:
           CLAWOS_PLATFORM_API_URL: ${{ secrets.CLAWOS_PLATFORM_API_URL }}
         run: |
           test "$CLAWOS_PLATFORM_API_URL" = "https://xapi.xavvi.com"
-          curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 --max-time 60 \
+          curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 60 --max-time 120 \
             "$CLAWOS_PLATFORM_API_URL/api/health"
           pnpm --dir source/apps/codex configure:release
 
@@ -138,7 +138,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          expected_version="${RELEASE_TAG#codex-v}"
+          expected_version="${RELEASE_TAG#xavvi-v}"
           asar="$(find source/apps/codex/release -type f -name 'app.asar' -print -quit)"
           test -n "$asar"
           node -e '
@@ -216,7 +216,7 @@ jobs:
         run: |
           for attempt in 1 2 3 4 5; do
             gh release view "$RELEASE_TAG" >/dev/null 2>&1 && break
-            gh release create "$RELEASE_TAG" --title "Xavvi ${RELEASE_TAG#codex-v}" --generate-notes >/dev/null 2>&1 && break
+            gh release create "$RELEASE_TAG" --title "Xavvi ${RELEASE_TAG#xavvi-v}" --generate-notes >/dev/null 2>&1 && break
             sleep $((attempt * 2))
           done
           gh release view "$RELEASE_TAG" >/dev/null
