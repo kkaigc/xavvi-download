@@ -211,7 +211,7 @@ jobs:
           node ../scripts/create-checksums.mjs "SHA256SUMS-${BUILD_OS}-${BUILD_ARCH}.txt"
           node --input-type=module -e '
             import fs from "node:fs"; import crypto from "node:crypto"
-            const files = fs.readdirSync(".").filter((name) => /\.(dmg|exe|zip|yml|blockmap)$/.test(name)).sort()
+            const files = fs.readdirSync(".").filter((name) => /\.(dmg|exe|zip|yml|blockmap)$/.test(name) && !name.startsWith("builder-")).sort()
             const assets = Object.fromEntries(files.map((name) => [name, crypto.createHash("sha256").update(fs.readFileSync(name)).digest("hex")]))
             fs.writeFileSync(`release-manifest-${process.env.BUILD_OS}-${process.env.BUILD_ARCH}.json`, JSON.stringify({
               version: process.env.RELEASE_TAG.replace(/^xavvi-v/, ""), source_sha: process.env.SOURCE_REF,
@@ -231,6 +231,8 @@ jobs:
             source/apps/codex/release/*.blockmap
             source/apps/codex/release/SHA256SUMS-*.txt
             source/apps/codex/release/release-manifest-*.json
+            !source/apps/codex/release/builder-debug.yml
+            !source/apps/codex/release/builder-effective-config.yaml
           if-no-files-found: error
 
   publish:
