@@ -253,3 +253,7 @@ jobs:
           done < <(find preserved-release-assets -maxdepth 1 -type f -print0 2>/dev/null || true)
           gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
           gh release edit "$RELEASE_TAG" --latest
+          gh release view xavvi-latest >/dev/null 2>&1 || \
+            gh release create xavvi-latest --title "Xavvi Desktop Updater Feed" \
+              --notes "Stable updater feed. Use versioned xavvi-v tags for direct downloads."
+          gh release upload xavvi-latest "${files[@]}" --clobber
