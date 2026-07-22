@@ -4,24 +4,23 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: Private source branch or commit
+        description: Immutable 40-character private source commit SHA
         required: true
-        default: main
         type: string
       release_tag:
         description: Public release tag
         required: true
-        default: xavvi-v1.0.8
+        default: xavvi-v1.0.10
         type: string
       target:
-        description: Client package target
+        description: Client package target (only all publishes stable releases)
         required: true
-        default: win-exe
+        default: all
         type: choice
         options:
+          - all
           - win-exe
           - mac-dmg-arm64
-          - all
 
 permissions:
   contents: write
@@ -36,6 +35,16 @@ jobs:
         include: ${{ fromJSON(inputs.target == 'win-exe' && '[{"name":"Windows x64 EXE","runner":"windows-latest","os":"win","platform":"win32","arch":"x64"}]' || inputs.target == 'mac-dmg-arm64' && '[{"name":"macOS arm64 DMG","runner":"macos-14","os":"mac","platform":"darwin","arch":"arm64"}]' || '[{"name":"macOS arm64","runner":"macos-14","os":"mac","platform":"darwin","arch":"arm64"},{"name":"macOS x64","runner":"macos-15-intel","os":"mac","platform":"darwin","arch":"x64"},{"name":"Windows x64","runner":"windows-latest","os":"win","platform":"win32","arch":"x64"}]') }}
 
     steps:
+      - name: Validate immutable source revision
+        shell: bash
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          if [[ ! "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::source_ref must be a full lowercase 40-character commit SHA"
+            exit 1
+          fi
+
       - name: Checkout private source
         uses: actions/checkout@v4
         with:
@@ -44,6 +53,15 @@ jobs:
           ssh-key: ${{ secrets.SOURCE_REPO_SSH_KEY }}
           persist-credentials: false
           path: source
+
+      - name: Verify checked out source
+        shell: bash
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          actual="$(git -C source rev-parse HEAD)"
+          test "$actual" = "$SOURCE_REF"
+          echo "source_sha=$actual" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -97,8 +115,7 @@ jobs:
           test -n "$VITE_SUPABASE_URL"
           test -n "$VITE_SUPABASE_ANON_KEY"
           status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
-            "$VITE_SUPABASE_URL/rest/v1/app_version?select=id&limit=1" \
-            -H "apikey: $VITE_SUPABASE_ANON_KEY")"
+            "$VITE_SUPABASE_URL/rest/v1/app_version?select=id&limit=1" -H "apikey: $VITE_SUPABASE_ANON_KEY")"
           test "$status" -ge 200 -a "$status" -lt 500
 
       - name: Build renderer and run tests
@@ -116,85 +133,83 @@ jobs:
           CLAWOS_PLATFORM_API_URL: ${{ secrets.CLAWOS_PLATFORM_API_URL }}
         run: |
           test "$CLAWOS_PLATFORM_API_URL" = "https://xapi.xavvi.com"
-          if ! curl --fail --silent --show-error --retry 2 --retry-all-errors --retry-delay 5 --connect-timeout 20 --max-time 60 \
-            "$CLAWOS_PLATFORM_API_URL/api/health"; then
-            echo "::warning::Production API health check was unreachable from the GitHub runner; endpoint identity and packaged config checks remain enforced."
-          fi
+          curl --fail --silent --show-error --retry 2 --retry-all-errors --retry-delay 5 --connect-timeout 20 --max-time 60 \
+            "$CLAWOS_PLATFORM_API_URL/api/health"
           pnpm --dir source/apps/codex configure:release
+
+      - name: Record build identity
+        shell: bash
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          BUILD_OS: ${{ matrix.os }}
+          BUILD_ARCH: ${{ matrix.arch }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          node -e '
+            const fs = require("node:fs")
+            fs.writeFileSync("source/apps/codex/resources/config/release-build.json", JSON.stringify({
+              version: process.env.RELEASE_TAG.replace(/^xavvi-v/, ""),
+              source_sha: process.env.SOURCE_REF,
+              workflow_run_id: process.env.RUN_ID,
+              platform: process.env.BUILD_OS,
+              arch: process.env.BUILD_ARCH,
+            }, null, 2) + "\n")
+          '
 
       - name: Package Electron client
         shell: bash
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: |
-          if [[ "${{ inputs.target }}" == "win-exe" ]]; then
-            pnpm --dir source/apps/codex exec electron-builder --win nsis --x64 --publish never
-          elif [[ "${{ inputs.target }}" == "mac-dmg-arm64" ]]; then
-            pnpm --dir source/apps/codex exec electron-builder --mac dmg zip --arm64 --publish never
-          else
-            pnpm --dir source/apps/codex exec electron-builder --${{ matrix.os }} --${{ matrix.arch }} --publish never
-          fi
+        run: pnpm --dir source/apps/codex exec electron-builder --${{ matrix.os }} --${{ matrix.arch }} --publish never
 
-      - name: Verify packaged application version
+      - name: Verify packaged desktop contract
         shell: bash
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_REF: ${{ inputs.source_ref }}
         run: |
-          expected_version="${RELEASE_TAG#xavvi-v}"
+          version="${RELEASE_TAG#xavvi-v}"
           asar="$(find source/apps/codex/release -type f -name 'app.asar' -print -quit)"
           test -n "$asar"
-          node -e '
-            const asar = require("./source/apps/codex/node_modules/.pnpm/@electron+asar@3.4.1/node_modules/@electron/asar")
-            const document = JSON.parse(asar.extractFile(process.argv[1], "package.json").toString("utf8"))
-            if (document.version !== process.argv[2]) throw new Error(`Packaged version ${document.version} does not match ${process.argv[2]}`)
-          ' "$asar" "$expected_version"
-          if [[ "${{ matrix.os }}" == "mac" ]]; then
-            app_bundle="$(find source/apps/codex/release -type d -name 'Xavvi.app' -print -quit)"
-            test -n "$app_bundle"
-            test "$(plutil -extract CFBundleShortVersionString raw "$app_bundle/Contents/Info.plist")" = "$expected_version"
-          fi
-
-      - name: Verify packaged Electron modules
-        shell: bash
-        run: |
-          asar="$(find source/apps/codex/release -type f -name 'app.asar' -print -quit)"
-          test -n "$asar"
-          node source/apps/codex/node_modules/.pnpm/@electron+asar@3.4.1/node_modules/@electron/asar/bin/asar.js list "$asar" > packaged-files.raw.txt
-          tr '\\' '/' < packaged-files.raw.txt > packaged-files.txt
-          missing=0
-          for file in \
-            /electron/main.cjs \
-            /electron/desktop-endpoints.cjs \
-            /electron/model-provider-config.cjs \
-            /electron/runtime-paths.cjs \
-            /electron/lib/codex-workspace.cjs \
-            /electron/window-chrome.cjs \
-            /dist/brand/xavvi-logo.svg \
-            /dist-api/server.js; do
-            if ! grep -Fx "$file" packaged-files.txt >/dev/null; then
-              echo "::error::Packaged app.asar is missing $file"
-              missing=1
-            fi
-          done
-          test "$missing" -eq 0
-
-      - name: Verify packaged endpoint configuration
-        shell: bash
-        run: |
+          asar="$(node -e 'console.log(require("node:path").resolve(process.argv[1]))' "$asar")"
+          pnpm --dir source/apps/codex verify:package-contract "$asar" "$version"
+          build_file="$(find source/apps/codex/release -type f -path '*/config/release-build.json' -print -quit)"
           endpoint_file="$(find source/apps/codex/release -type f -path '*/config/endpoints.json' -print -quit)"
-          test -n "$endpoint_file"
+          test -n "$build_file" -a -n "$endpoint_file"
           node -e '
             const fs = require("node:fs")
-            const document = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))
-            if (document.platform_api_url !== "https://xapi.xavvi.com") {
-              throw new Error(`Unexpected packaged platform endpoint: ${document.platform_api_url}`)
-            }
-          ' "$endpoint_file"
+            const build = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))
+            const endpoint = JSON.parse(fs.readFileSync(process.argv[2], "utf8"))
+            if (build.source_sha !== process.env.SOURCE_REF) throw new Error("Packaged source SHA mismatch")
+            if (build.version !== process.env.RELEASE_TAG.replace(/^xavvi-v/, "")) throw new Error("Packaged release version mismatch")
+            if (endpoint.platform_api_url !== "https://xapi.xavvi.com") throw new Error("Unexpected packaged platform endpoint")
+          ' "$build_file" "$endpoint_file"
+          if [[ "${{ matrix.os }}" == "mac" ]]; then
+            app_bundle="$(find source/apps/codex/release -type d -name 'Xavvi.app' -print -quit)"
+            test "$(plutil -extract CFBundleShortVersionString raw "$app_bundle/Contents/Info.plist")" = "$version"
+          fi
 
-      - name: Create checksums
+      - name: Create checksums and release manifest
         shell: bash
         working-directory: source/apps/codex/release
-        run: node ../scripts/create-checksums.mjs SHA256SUMS-${{ matrix.os }}-${{ matrix.arch }}.txt
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          BUILD_OS: ${{ matrix.os }}
+          BUILD_ARCH: ${{ matrix.arch }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          node ../scripts/create-checksums.mjs "SHA256SUMS-${BUILD_OS}-${BUILD_ARCH}.txt"
+          node --input-type=module -e '
+            import fs from "node:fs"; import crypto from "node:crypto"
+            const files = fs.readdirSync(".").filter((name) => /\.(dmg|exe|zip|yml|blockmap)$/.test(name)).sort()
+            const assets = Object.fromEntries(files.map((name) => [name, crypto.createHash("sha256").update(fs.readFileSync(name)).digest("hex")]))
+            fs.writeFileSync(`release-manifest-${process.env.BUILD_OS}-${process.env.BUILD_ARCH}.json`, JSON.stringify({
+              version: process.env.RELEASE_TAG.replace(/^xavvi-v/, ""), source_sha: process.env.SOURCE_REF,
+              workflow_run_id: process.env.RUN_ID, platform: process.env.BUILD_OS, arch: process.env.BUILD_ARCH, assets,
+            }, null, 2) + "\n")
+          '
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
@@ -207,55 +222,65 @@ jobs:
             source/apps/codex/release/*.yml
             source/apps/codex/release/*.blockmap
             source/apps/codex/release/SHA256SUMS-*.txt
+            source/apps/codex/release/release-manifest-*.json
           if-no-files-found: error
 
-      - name: Preserve updater assets for platforms not rebuilt
-        if: inputs.target != 'all'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: kkaigc/xavvi-download
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        run: |
-          previous_tag="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name 2>/dev/null || true)"
-          if [[ -z "$previous_tag" || "$previous_tag" == "$RELEASE_TAG" ]]; then
-            exit 0
-          fi
-          mkdir -p preserved-release-assets
-          if [[ "${{ inputs.target }}" == "win-exe" ]]; then
-            patterns=('mac-*.yml' 'SHA256SUMS-mac-*.txt' 'Xavvi-*-mac-*')
-          else
-            patterns=('win-*.yml' 'SHA256SUMS-win-*.txt' 'Xavvi-*-win-*')
-          fi
-          for pattern in "${patterns[@]}"; do
-            gh release download "$previous_tag" --repo "$GH_REPO" --dir preserved-release-assets --pattern "$pattern" --skip-existing || true
-          done
-          find preserved-release-assets -maxdepth 1 -type f -print
+  publish:
+    name: Publish stable release
+    if: inputs.target == 'all'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download verified build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: xavvi-*-${{ inputs.release_tag }}
+          path: release-assets
+          merge-multiple: true
 
-      - name: Publish public release assets
+      - name: Validate complete release set
+        shell: bash
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          test "$(find release-assets -name 'release-manifest-*.json' | wc -l | tr -d ' ')" = 3
+          node -e '
+            const fs = require("node:fs")
+            const manifests = fs.readdirSync("release-assets").filter((name) => name.startsWith("release-manifest-")).map((name) => JSON.parse(fs.readFileSync(`release-assets/${name}`, "utf8")))
+            if (manifests.some((item) => item.source_sha !== process.env.SOURCE_REF)) throw new Error("Release source SHA mismatch")
+            if (manifests.some((item) => item.version !== process.env.RELEASE_TAG.replace(/^xavvi-v/, ""))) throw new Error("Release version mismatch")
+            if (new Set(manifests.map((item) => `${item.platform}-${item.arch}`)).size !== 3) throw new Error("Release platform set is incomplete")
+          '
+          test -n "$(find release-assets -maxdepth 1 -name 'win-x64.yml' -print -quit)"
+          test -n "$(find release-assets -maxdepth 1 -name 'mac-arm64.yml' -print -quit)"
+          test -n "$(find release-assets -maxdepth 1 -name 'mac-x64.yml' -print -quit)"
+
+      - name: Publish public release and updater feed
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: kkaigc/xavvi-download
           RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_REF: ${{ inputs.source_ref }}
         run: |
-          for attempt in 1 2 3 4 5; do
-            gh release view "$RELEASE_TAG" >/dev/null 2>&1 && break
-            gh release create "$RELEASE_TAG" --title "Xavvi ${RELEASE_TAG#xavvi-v}" --generate-notes >/dev/null 2>&1 && break
-            sleep $((attempt * 2))
-          done
-          gh release view "$RELEASE_TAG" >/dev/null
-          files=()
-          while IFS= read -r -d '' file; do
-            files+=("$file")
-          done < <(find source/apps/codex/release -maxdepth 1 -type f \
-            ! -name 'builder-debug.yml' ! -name 'builder-effective-config.yaml' -print0)
-          while IFS= read -r -d '' file; do
-            files+=("$file")
-          done < <(find preserved-release-assets -maxdepth 1 -type f -print0 2>/dev/null || true)
-          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
-          gh release edit "$RELEASE_TAG" --latest
-          gh release view xavvi-latest >/dev/null 2>&1 || \
-            gh release create xavvi-latest --title "Xavvi Desktop Updater Feed" \
-              --notes "Stable updater feed. Use versioned xavvi-v tags for direct downloads."
-          gh release upload xavvi-latest "${files[@]}" --clobber
+          if gh release view "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            mkdir existing-manifest
+            gh release download "$RELEASE_TAG" --repo "$GH_REPO" --dir existing-manifest --pattern 'release-manifest-*.json' || true
+            existing_source="$(find existing-manifest -name 'release-manifest-*.json' -print -quit | xargs -r jq -r .source_sha)"
+            test -n "$existing_source" -a "$existing_source" = "$SOURCE_REF"
+          else
+            gh release create "$RELEASE_TAG" --repo "$GH_REPO" --title "Xavvi ${RELEASE_TAG#xavvi-v}" \
+              --notes "Built from private source commit ${SOURCE_REF}. Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          fi
+          mapfile -d '' files < <(find release-assets -maxdepth 1 -type f -print0)
+          gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GH_REPO" --clobber
+          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --latest
+
+          gh release view xavvi-latest --repo "$GH_REPO" >/dev/null 2>&1 || \
+            gh release create xavvi-latest --repo "$GH_REPO" --title "Xavvi Desktop Updater Feed" \
+              --notes "Stable updater feed. Versioned releases are the immutable download source."
+          while IFS= read -r asset; do
+            gh release delete-asset xavvi-latest "$asset" --repo "$GH_REPO" --yes
+          done < <(gh release view xavvi-latest --repo "$GH_REPO" --json assets --jq '.assets[].name')
+          gh release upload xavvi-latest "${files[@]}" --repo "$GH_REPO"
