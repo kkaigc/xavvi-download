@@ -207,6 +207,29 @@ jobs:
             source/apps/codex/release/SHA256SUMS-*.txt
           if-no-files-found: error
 
+      - name: Preserve updater assets for platforms not rebuilt
+        if: inputs.target != 'all'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: kkaigc/xavvi-download
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          previous_tag="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name 2>/dev/null || true)"
+          if [[ -z "$previous_tag" || "$previous_tag" == "$RELEASE_TAG" ]]; then
+            exit 0
+          fi
+          mkdir -p preserved-release-assets
+          if [[ "${{ inputs.target }}" == "win-exe" ]]; then
+            patterns=('mac-*.yml' 'SHA256SUMS-mac-*.txt' 'Xavvi-*-mac-*')
+          else
+            patterns=('win-*.yml' 'SHA256SUMS-win-*.txt' 'Xavvi-*-win-*')
+          fi
+          for pattern in "${patterns[@]}"; do
+            gh release download "$previous_tag" --repo "$GH_REPO" --dir preserved-release-assets --pattern "$pattern" --skip-existing || true
+          done
+          find preserved-release-assets -maxdepth 1 -type f -print
+
       - name: Publish public release assets
         shell: bash
         env:
@@ -225,4 +248,7 @@ jobs:
             files+=("$file")
           done < <(find source/apps/codex/release -maxdepth 1 -type f \
             ! -name 'builder-debug.yml' ! -name 'builder-effective-config.yaml' -print0)
+          while IFS= read -r -d '' file; do
+            files+=("$file")
+          done < <(find preserved-release-assets -maxdepth 1 -type f -print0 2>/dev/null || true)
           gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
