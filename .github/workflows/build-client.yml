@@ -252,3 +252,4 @@ jobs:
             files+=("$file")
           done < <(find preserved-release-assets -maxdepth 1 -type f -print0 2>/dev/null || true)
           gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+          gh release edit "$RELEASE_TAG" --latest
